@@ -11,6 +11,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRouter, COMPAT, AIError } from './ai/router.mjs';
+import { createSupabase } from './supabase.mjs';
+import { createRAG } from './rag.mjs';
+import { createBilling } from './billing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 loadDotEnv(path.join(root, '.env'));
@@ -27,66 +31,35 @@ function loadDotEnv(file) {
   }
 }
 
-// ---------------- AI providers ----------------
-// AI_PROVIDER: openai | anthropic | groq | openrouter | gemini | ollama | openai-compatible | none
-const PROVIDERS = {
-  openai: { base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', kind: 'openai' },
-  // Default models are only a starting point: if a provider retires one, the server asks the provider's
-  // /models endpoint and picks the best available match from `prefer` (set AI_MODEL to pin a model).
-  groq: { base: 'https://api.groq.com/openai/v1', model: 'openai/gpt-oss-120b', kind: 'openai', prefer: [/gpt-oss-120b/, /llama-3\.3-70b/, /llama-4/, /qwen/, /gpt-oss/, /llama/] },
-  openrouter: { base: 'https://openrouter.ai/api/v1', model: 'openai/gpt-oss-120b:free', kind: 'openai', prefer: [/:free$/] },
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', kind: 'openai', prefer: [/^(models\/)?gemini-[\d.]+-flash$/, /^(models\/)?gemini-[\d.]+-flash-lite$/, /flash(?!.*(image|tts|live|preview|exp))/] },
-  ollama: { base: 'http://127.0.0.1:11434/v1', model: 'llama3.1', kind: 'openai', keyless: true, prefer: [/./] },
-  'openai-compatible': { base: '', model: '', kind: 'openai' },
-  anthropic: { base: 'https://api.anthropic.com/v1', model: 'claude-haiku-4-5', kind: 'anthropic' },
-};
+// ---------------- AI (multi-provider router) ----------------
+// OpenAI (primary) · Gemini with Google Search grounding (research) · Anthropic (optional) · legacy AI_PROVIDER.
+// See server/ai/router.mjs and AI_ARCHITECTURE.md.
+const supabase = createSupabase(env);
+const router = createRouter(env, {
+  onUsage: supabase.admin && env.AI_USAGE_LOG !== 'false'
+    ? (e) => supabase.insert('ai_usage', [{ user_id: e.userId, task: e.task, provider: e.provider, model: e.model, tier: e.tier, input_tokens: e.input, output_tokens: e.output, cost_usd: e.cost, latency_ms: e.ms, ok: e.ok, status: e.status || null, streamed: !!e.stream }])
+    : null,
+});
+const rag = createRAG(env, supabase, router);
+const billing = createBilling(env, supabase);
+
+// Legacy single-provider config — still used for speech-to-text.
 function aiConfig() {
-  const name = (env.AI_PROVIDER || 'none').toLowerCase();
-  const p = PROVIDERS[name];
+  const name = (env.AI_PROVIDER || '').toLowerCase();
+  if (env.OPENAI_API_KEY && (!name || name === 'none')) return { name: 'openai', base: (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''), key: env.OPENAI_API_KEY, model: env.OPENAI_MODEL || '' };
+  const p = COMPAT[name];
   if (!p) return null;
-  const base = env.AI_BASE_URL || p.base, model = env.AI_MODEL || p.model, key = env.AI_API_KEY || '';
-  if (!base || !model || (!key && !p.keyless)) return null;
-  return { name, base: base.replace(/\/$/, ''), model: resolvedModel || model, pinned: !!env.AI_MODEL, key, kind: p.kind, prefer: p.prefer || [] };
-}
-let resolvedModel = null;
-
-// Ask the provider which models exist and pick the best match (used when the default model is gone).
-async function discoverModel(cfg) {
-  const r = await fetch(`${cfg.base}/models`, { signal: AbortSignal.timeout(15_000), headers: cfg.key ? { authorization: `Bearer ${cfg.key}` } : {} });
-  const d = await r.json().catch(() => ({}));
-  const ids = (d.data || d.models || []).map((m) => String(m.id || m.name || '')).filter(Boolean).sort().reverse(); // newest versions first
-  for (const re of cfg.prefer) { const hit = ids.find((id) => re.test(id)); if (hit) return hit.replace(/^models\//, ''); }
-  return null;
+  const base = env.AI_BASE_URL || p.base, key = env.AI_API_KEY || '';
+  if (!base || (!key && !p.keyless)) return null;
+  return { name, base: base.replace(/\/$/, ''), key, model: env.AI_MODEL || '' };
 }
 
-async function callAI(messages, { json = false, maxTokens = 1400 } = {}) {
-  const cfg = aiConfig();
-  if (!cfg) throw httpError(503, 'No AI provider is configured on this server.');
-  const ctl = AbortSignal.timeout(60_000);
-  if (cfg.kind === 'anthropic') {
-    const system = messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
-    const rest = messages.filter((m) => m.role !== 'system');
-    const r = await fetch(`${cfg.base}/messages`, { method: 'POST', signal: ctl, headers: { 'content-type': 'application/json', 'x-api-key': cfg.key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, system: system + (json ? '\n\nRespond with a single JSON object only.' : ''), messages: rest }) });
-    const d = await r.json().catch(() => ({}));
-    if (!r.ok) throw httpError(502, `AI provider error: ${d?.error?.message || r.status}`);
-    return d.content?.map((c) => c.text || '').join('') || '';
-  }
-  const call = async (model, withFormat) => {
-    const msgs = json && !withFormat ? [...messages.slice(0, -1), { ...messages[messages.length - 1], content: messages[messages.length - 1].content + '\n\nRespond with a single JSON object only, no markdown.' }] : messages;
-    const r = await fetch(`${cfg.base}/chat/completions`, { method: 'POST', signal: ctl, headers: { 'content-type': 'application/json', ...(cfg.key ? { authorization: `Bearer ${cfg.key}` } : {}) }, body: JSON.stringify({ model, messages: msgs, temperature: 0.3, max_tokens: maxTokens, ...(json && withFormat ? { response_format: { type: 'json_object' } } : {}) }) });
-    const d = await r.json().catch(() => ({}));
-    return { ok: r.ok, status: r.status, d, msg: String(d?.error?.message || d?.[0]?.error?.message || r.status) };
-  };
-  let res = await call(cfg.model, json);
-  if (!res.ok && json && /response_format|json/i.test(res.msg)) res = await call(cfg.model, false);
-  if (!res.ok && !cfg.pinned && (res.status === 404 || /model|not found|decommission|deprecat|does not exist/i.test(res.msg))) {
-    const m = await discoverModel(cfg).catch(() => null);
-    if (m && m !== cfg.model) { console.log(`[admitiq] model "${cfg.model}" unavailable — switching to "${m}"`); resolvedModel = m; res = await call(m, json); if (!res.ok && json) res = await call(m, false); }
-  }
-  if (!res.ok) throw httpError(502, `AI provider error: ${res.msg}`);
-  const text = res.d.choices?.[0]?.message?.content || '';
-  return text.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, ''); // strip reasoning traces some open models emit
+// Internal helper used by reviews/research summaries (already rate-limited by their routes).
+async function callAI(messages, { json = false, maxTokens = 1400, task = 'chat', user } = {}) {
+  const out = await router.run({ task, messages, json, maxTokens, user, skipQuota: !user });
+  return out.text;
 }
+const aiReady = () => router.configured().length > 0;
 
 // ---------------- Speech-to-text (Whisper via the configured provider) ----------------
 // Used by browsers without built-in speech recognition. Groq and OpenAI expose /audio/transcriptions.
@@ -149,7 +122,7 @@ async function scorecard(params) {
 // ---------------- National directories (Urban Institute Education Data Portal, free, no key) ----------------
 // Data: NCES IPEDS (colleges) and Common Core of Data (public schools), ODC-By licensed via educationdata.urban.org.
 const URBAN = env.URBAN_BASE || 'https://educationdata.urban.org/api/v1';
-const YEARS = (env.DIRECTORY_YEARS || '2023,2022,2021').split(',').map((y) => y.trim());
+const YEARS = (env.DIRECTORY_YEARS || '2024,2023,2022').split(',').map((y) => y.trim());
 const FIPS = { AL: 1, AK: 2, AZ: 4, AR: 5, CA: 6, CO: 8, CT: 9, DE: 10, DC: 11, FL: 12, GA: 13, HI: 15, ID: 16, IL: 17, IN: 18, IA: 19, KS: 20, KY: 21, LA: 22, ME: 23, MD: 24, MA: 25, MI: 26, MN: 27, MS: 28, MO: 29, MT: 30, NE: 31, NV: 32, NH: 33, NJ: 34, NM: 35, NY: 36, NC: 37, ND: 38, OH: 39, OK: 40, OR: 41, PA: 42, RI: 44, SC: 45, SD: 46, TN: 47, TX: 48, UT: 49, VT: 50, VA: 51, WA: 53, WV: 54, WI: 55, WY: 56, PR: 72 };
 const dirCache = new Map();
 async function urbanAll(pathTpl, maxPages = 12) {
@@ -222,7 +195,7 @@ async function webReviews(name) {
   }
   if (!sources.length) return { themes: [], sources: [], summary: null, note: 'No public reviews were found.' };
   let themes = [], summary = null;
-  if (aiConfig()) {
+  if (aiReady()) {
     const ctx = sources.slice(0, 14).map((s, i) => `[${i + 1}] ${s.domain} — ${s.title}\n${s.snippet}`).join('\n\n');
     const raw = await callAI([
       { role: 'system', content: 'You summarize what students say about a college, using ONLY the numbered search snippets. These are anecdotes, not facts. Return JSON: {"summary": string (2 sentences, hedged: "Reviewers often say…"), "themes": [{"label": string, "tone": "positive"|"mixed"|"negative", "summary": string (1 sentence), "sources": [numbers]}]}. 4–7 themes covering academics, social life, housing/food, career, cost, campus culture where present. Cite every theme. Never invent details, names or statistics.' },
@@ -290,7 +263,7 @@ async function politeFetchText(u) {
   return { text: text.slice(0, 6000) };
 }
 
-async function doResearch({ question, collegeIds = [] }, bundled) {
+async function doResearch({ question, collegeIds = [], verify = false }, bundled, user) {
   const steps = []; const findings = []; const conflicts = []; const uncertainty = [];
   const today = new Date().toISOString().slice(0, 10);
   const push = (label, status, detail) => steps.push({ label, status, detail });
@@ -337,18 +310,51 @@ async function doResearch({ question, collegeIds = [] }, bundled) {
     results._pages = pages;
   } else if (!steps.some((s) => s.label === 'Web search')) push('Web search', 'skipped', 'No search API configured');
 
+  // 2b) The platform's own source library (hybrid pgvector + full-text retrieval)
+  if (supabase.admin) {
+    try {
+      const lib = await rag.search(`${question} ${colleges.map((c) => c.name).join(' ')}`.trim(), { limit: 6 });
+      for (const s of lib.results) findings.push({ claim: s.title, value: (s.summary || s.excerpt || '').slice(0, 200), source: s.organization || new URL(s.url).host, url: s.url, sourceId: s.id, retrieved: s.last_verified_at?.slice(0, 10) || 'not yet verified', reportingYear: s.data_year || undefined, confidence: s.reliability_tier === 1 ? 'High' : s.reliability_tier === 2 ? 'Medium' : 'Low', official: s.reliability_tier === 1 });
+      push('Searching the AdmitIQ source library', 'done', `${lib.results.length} record(s) · ${lib.mode}`);
+    } catch (e) { push('Searching the AdmitIQ source library', 'error', e.message); }
+  }
+
+  // 2c) Gemini with Google Search grounding (current information with real citations)
+  let groundedAnswer = null;
+  if (router.hasProvider('gemini')) {
+    try {
+      const g = await router.run({ task: 'research', user, messages: [
+        { role: 'system', content: `Today is ${today}. Research the question using Google Search. Prefer official university (.edu), government (.gov) and Common Data Set sources. State the academic year each fact applies to. If official sources disagree or you cannot find an official source, say so. Be concise.` },
+        { role: 'user', content: `${question}${colleges.length ? `\nColleges: ${colleges.map((c) => c.name).join(', ')}` : ''}` },
+      ] });
+      if (g.provider === 'gemini' && g.citations.length) {
+        groundedAnswer = { text: g.text, citations: g.citations, queries: g.searchQueries, model: g.model };
+        for (const c of g.citations) {
+          let host = ''; try { host = new URL(c.url).host; } catch { /* grounding redirect */ }
+          findings.push({ claim: c.title || host, value: 'Cited by Google Search grounding', source: c.title || host, url: c.url, retrieved: today, confidence: OFFICIAL.test(c.title || '') ? 'Medium' : 'Low', official: OFFICIAL.test(c.title || '') });
+        }
+        push('Google Search grounding (Gemini)', 'done', `${g.citations.length} cited web source(s)`);
+      } else push('Google Search grounding (Gemini)', 'skipped', 'No grounded citations were returned');
+    } catch (e) { push('Google Search grounding (Gemini)', 'error', e.message); }
+  } else push('Google Search grounding (Gemini)', 'skipped', 'GEMINI_API_KEY not set');
+
   // 3) Optional cited summary
   let summary = null;
-  if (aiConfig() && findings.length) {
+  if (aiReady() && findings.length) {
     try {
       const ctx = findings.map((f, i) => `[${i + 1}] ${f.claim}: ${f.value || ''} (${f.source}, ${f.url}, retrieved ${f.retrieved})`).join('\n') + (results?._pages?.length ? '\n\nPAGE EXCERPTS:\n' + results._pages.map((p) => `${p.url}\n${p.text.slice(0, 2500)}`).join('\n\n') : '');
-      summary = await callAI([{ role: 'system', content: 'Summarize ONLY what the numbered sources say, citing them like [1]. Prefer official sources. If sources conflict or do not answer the question, say so explicitly. Never add facts not present in the sources.' }, { role: 'user', content: `Question: ${question}\n\nSources:\n${ctx}` }], { maxTokens: 700 });
-      push('Summarizing with citations', 'done', aiConfig().model);
+      summary = await callAI([{ role: 'system', content: 'Summarize ONLY what the numbered sources say, citing them like [1]. Prefer official sources. If sources conflict or do not answer the question, say so explicitly. Never add facts not present in the sources.' }, { role: 'user', content: `Question: ${question}\n\nSources:\n${ctx}${groundedAnswer ? `\n\nGROUNDED WEB ANSWER (cite the matching sources above):\n${groundedAnswer.text}` : ''}` }], { maxTokens: 900, task: 'analysis', user });
+      push('Summarizing with citations', 'done', 'AI summary of the sources above');
     } catch (e) { push('Summarizing with citations', 'error', e.message); }
   }
   if (!findings.length) uncertainty.push('No sources were retrieved, so no answer is given. AdmitIQ does not fill gaps with guesses.');
   if (findings.some((f) => !f.official)) uncertainty.push('Non-official results are shown for context only and were not used to override official figures.');
-  return { question, steps, findings, summary, conflicts, uncertainty };
+  let verification = null;
+  if (verify && summary && router.configured().length > 1) {
+    try { verification = await router.verify({ question, answer: summary, sources: findings.map((f) => ({ title: f.claim, url: f.url, text: f.value })), user }); push('Independent verification', 'done', `${verification.verdict} (${verification.provider})`); }
+    catch (e) { push('Independent verification', 'error', e.message); }
+  }
+  return { question, steps, findings, summary, grounded: groundedAnswer, verification, conflicts, uncertainty };
 }
 
 // ---------------- HTTP plumbing ----------------
@@ -365,24 +371,35 @@ async function readJSON(req, limit = 200_000) {
   for await (const c of req) { size += c.length; if (size > limit) throw httpError(413, 'Request too large'); chunks.push(c); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { throw httpError(400, 'Invalid JSON'); }
 }
-// Optional: require a signed-in Supabase user for AI/research endpoints (prevents anonymous use of your keys).
-async function requireUser(req) {
-  if (env.REQUIRE_AUTH !== 'true') return;
-  const token = (req.headers.authorization || '').replace(/^Bearer /, '');
-  if (!token || !env.SUPABASE_URL) throw httpError(401, 'Sign in to use AI and research features.');
-  const r = await fetch(`${env.SUPABASE_URL}/auth/v1/user`, { headers: { authorization: `Bearer ${token}`, apikey: env.SUPABASE_ANON_KEY || '' } });
-  if (!r.ok) throw httpError(401, 'Your session has expired. Sign in again.');
+// Who is calling? Verifies the Supabase access token (if any) and looks up the plan.
+// REQUIRE_AUTH=true rejects anonymous calls to AI/research. Without Supabase (single-user local install)
+// the caller gets AI_LOCAL_PLAN (default "ultimate") so a self-hosted copy isn't throttled.
+const planCache = new Map();
+async function identify(req, ip) {
+  const token = String(req.headers.authorization || '').replace(/^Bearer /, '');
+  const u = token ? await supabase.getUser(token) : null;
+  if (token && !u && supabase.enabled) throw httpError(401, 'Your session has expired. Sign in again.');
+  if (!u) {
+    if (env.REQUIRE_AUTH === 'true') throw httpError(401, 'Sign in to use AI and research features.');
+    return { id: null, ip, plan: supabase.enabled ? 'anonymous' : (env.AI_LOCAL_PLAN || 'ultimate') };
+  }
+  const hit = planCache.get(u.id);
+  let plan = hit && Date.now() - hit.at < 60_000 ? hit.plan : null;
+  if (!plan) { plan = await supabase.planFor(u.id); planCache.set(u.id, { plan, at: Date.now() }); }
+  const admins = String(env.ADMIN_EMAILS || '').toLowerCase().split(',').map((x) => x.trim()).filter(Boolean);
+  return { ...u, ip, plan, admin: !!u.email && admins.includes(u.email.toLowerCase()) };
 }
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.txt': 'text/plain' };
 const SECURITY_HEADERS = {
   'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin', 'x-frame-options': 'DENY',
   'permissions-policy': 'camera=(), microphone=(), geolocation=()',
-  'content-security-policy': ["default-src 'self'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com", "img-src 'self' data: blob:", `connect-src 'self' ${env.SUPABASE_URL || ''}`.trim(), "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'"].join('; '),
+  'content-security-policy': ["default-src 'self'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com", "img-src 'self' data: blob:", `connect-src 'self' ${env.SUPABASE_URL || ''} https://checkout.stripe.com`.trim(), "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'"].join('; '),
 };
 function send(res, status, body, headers = {}) { res.writeHead(status, { ...SECURITY_HEADERS, ...headers }); res.end(body); }
 const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json', 'cache-control': 'no-store' });
 
+export { server, router, billing };
 let bundledColleges = [];
 try { bundledColleges = JSON.parse(fs.readFileSync(path.join(DIST, 'colleges.json'), 'utf8')); } catch { /* built by build script */ }
 
@@ -391,13 +408,21 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   try {
     if (url.pathname === '/api/health') {
-      const ai = aiConfig();
-      return json(res, 200, { directory: env.DISABLE_DIRECTORY === 'true' ? null : { colleges: true, highSchools: true, stats: !!env.SCORECARD_API_KEY }, reviews: !!(env.SEARCH_PROVIDER && env.SEARCH_API_KEY), ai: ai ? { provider: ai.name, model: ai.model, transcribe: !!transcribeConfig() } : null, research: { search: env.SEARCH_PROVIDER && env.SEARCH_API_KEY ? env.SEARCH_PROVIDER : null, scorecard: !!env.SCORECARD_API_KEY }, supabase: env.SUPABASE_URL && env.SUPABASE_ANON_KEY ? { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } : null });
+      const ai = router.status();
+      return json(res, 200, { directory: env.DISABLE_DIRECTORY === 'true' ? null : { colleges: true, highSchools: true, stats: !!env.SCORECARD_API_KEY }, reviews: !!(env.SEARCH_PROVIDER && env.SEARCH_API_KEY),
+        ai: router.configured().length ? { providers: Object.keys(ai.providers), provider: Object.keys(ai.providers).join(' + '), model: Object.values(ai.providers)[0]?.models?.fast || Object.values(ai.providers)[0]?.models?.main || 'auto-selected', grounding: router.hasProvider('gemini'), transcribe: !!transcribeConfig(), streaming: true } : null,
+        research: { search: env.SEARCH_PROVIDER && env.SEARCH_API_KEY ? env.SEARCH_PROVIDER : null, scorecard: !!env.SCORECARD_API_KEY, grounding: router.hasProvider('gemini'), library: supabase.admin, embeddings: rag.canEmbed },
+        billing: billing.enabled, supabase: supabase.enabled ? { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY } : null });
     }
     if (url.pathname.startsWith('/api/')) {
       if (req.method !== 'POST') throw httpError(405, 'Use POST');
+      // Stripe webhook needs the raw body for signature verification, and no user token.
+      if (url.pathname === '/api/billing/webhook') {
+        const raw = (await readRaw(req, 1_000_000)).toString('utf8');
+        return json(res, 200, await billing.handleWebhook(raw, req.headers['stripe-signature']));
+      }
       if (url.pathname === '/api/transcribe') {
-        await requireUser(req);
+        await identify(req, ip);
         rateLimit(ip, 2);
         const mime = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
         if (!/^audio\//.test(mime)) throw httpError(415, 'Send audio (audio/webm, audio/mp4, audio/ogg or audio/wav).');
@@ -405,12 +430,59 @@ const server = http.createServer(async (req, res) => {
         return json(res, 200, { text: await transcribeAudio(buf, mime) });
       }
       const body = await readJSON(req);
-      await requireUser(req);
+      const user = await identify(req, ip);
+      const cleanMessages = (m) => {
+        if (!Array.isArray(m) || !m.length || m.length > 40) throw httpError(400, 'messages must be a non-empty array (max 40)');
+        return m.map((x) => ({ role: ['system', 'user', 'assistant'].includes(x.role) ? x.role : 'user', content: String(x.content || '').slice(0, 60000) }));
+      };
       if (url.pathname === '/api/ai') {
         rateLimit(ip);
-        if (!Array.isArray(body.messages) || !body.messages.length || body.messages.length > 20) throw httpError(400, 'messages must be a non-empty array (max 20)');
-        const msgs = body.messages.map((m) => ({ role: ['system', 'user', 'assistant'].includes(m.role) ? m.role : 'user', content: String(m.content || '').slice(0, 24000) }));
-        return json(res, 200, { text: await callAI(msgs, { json: !!body.json }) });
+        const out = await router.run({ task: String(body.task || 'chat'), messages: cleanMessages(body.messages), json: !!body.json, user });
+        return json(res, 200, { text: out.text, provider: out.provider, model: out.model, citations: out.citations, grounded: out.grounded, usage: out.usage, remaining: router.remaining(user) });
+      }
+      if (url.pathname === '/api/ai/stream') {
+        rateLimit(ip);
+        const msgs = cleanMessages(body.messages);
+        res.writeHead(200, { ...SECURITY_HEADERS, 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
+        const sse = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+        try {
+          const out = await router.stream({ task: String(body.task || 'chat'), messages: msgs, user }, (delta) => sse('delta', { text: delta }));
+          sse('done', { provider: out.provider, model: out.model, usage: out.usage, remaining: router.remaining(user) });
+        } catch (e) { sse('error', { error: e.message, status: e.status || 500, partial: e.partial || null }); }
+        return res.end();
+      }
+      if (url.pathname === '/api/ai/verify') {
+        rateLimit(ip, 2);
+        if (!body.question || !body.answer) throw httpError(400, 'question and answer are required');
+        return json(res, 200, await router.verify({ question: String(body.question).slice(0, 2000), answer: String(body.answer).slice(0, 20000), sources: Array.isArray(body.sources) ? body.sources.slice(0, 20) : [], usedProvider: body.usedProvider, user }));
+      }
+      if (url.pathname === '/api/me/usage') return json(res, 200, { ...router.remaining(user), signedIn: !!user.id });
+      if (url.pathname === '/api/library/search') {
+        rateLimit(ip, 0.5);
+        if (!body.q || String(body.q).length > 300) throw httpError(400, 'q is required (max 300 characters)');
+        return json(res, 200, await rag.search(String(body.q), { limit: Number(body.limit) || 10, category: body.category, collegeId: body.collegeId }));
+      }
+      if (url.pathname === '/api/library/answer') {
+        rateLimit(ip, 3);
+        if (!body.q || String(body.q).length > 500) throw httpError(400, 'q is required (max 500 characters)');
+        return json(res, 200, await rag.answer(String(body.q), { user, collegeId: body.collegeId, category: body.category }));
+      }
+      if (url.pathname === '/api/library/stats') {
+        rateLimit(ip, 0.5);
+        if (!supabase.admin) return json(res, 200, { configured: false });
+        const [stats] = await supabase.rpc('source_library_stats', {}).then((r) => (Array.isArray(r) ? r : [r]));
+        return json(res, 200, { configured: true, ...stats });
+      }
+      if (url.pathname.startsWith('/api/billing/')) {
+        if (!user.id) throw httpError(401, 'Sign in to manage billing.');
+        if (url.pathname === '/api/billing/checkout') return json(res, 200, await billing.checkout(user, body));
+        if (url.pathname === '/api/billing/portal') return json(res, 200, await billing.portal(user));
+        if (url.pathname === '/api/billing/invoices') return json(res, 200, { invoices: await billing.invoices(user) });
+      }
+      if (url.pathname === '/api/admin/status') {
+        if (!user.admin) throw httpError(403, 'Admins only (set ADMIN_EMAILS on the server).');
+        const db = supabase.admin ? await supabase.rpc('admin_dashboard_stats', {}).then((r) => (Array.isArray(r) ? r[0] : r)).catch((e) => ({ error: e.message })) : null;
+        return json(res, 200, { ai: router.status(), usage24h: router.usageSummary(), usage30d: router.usageSummary({ sinceMs: 30 * 864e5 }), database: db, billing: billing.enabled, uptimeSec: Math.round(process.uptime()), memoryMb: Math.round(process.memoryUsage().rss / 1e6) });
       }
       if (url.pathname === '/api/colleges/search') {
         rateLimit(ip, 0.5);
@@ -443,7 +515,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (url.pathname === '/api/research') {
         rateLimit(ip, 3);
-        return json(res, 200, await doResearch(body, bundledColleges));
+        return json(res, 200, await doResearch(body, bundledColleges, user));
       }
       throw httpError(404, 'Unknown API route');
     }
@@ -460,12 +532,12 @@ const server = http.createServer(async (req, res) => {
   } catch (e) {
     const status = e.status || (e.name === 'TimeoutError' ? 504 : 500);
     if (status >= 500) console.error('[admitiq]', e.message);
-    return json(res, status, { error: status === 500 ? 'Unexpected server error' : e.message });
+    if (res.headersSent) return res.end();
+    return json(res, status, { error: status === 500 ? 'Unexpected server error' : e.message, ...(e.code ? { code: e.code } : {}) });
   }
 });
 
-server.listen(PORT, () => {
-  const ai = aiConfig();
+if (env.ADMITIQ_NO_LISTEN !== 'true') server.listen(PORT, () => {
   console.log(`AdmitIQ running at http://localhost:${PORT}`);
-  console.log(`  AI: ${ai ? `${ai.name} (${ai.model})` : 'off'} · Scorecard: ${env.SCORECARD_API_KEY ? 'on' : 'off'} · Search: ${env.SEARCH_PROVIDER && env.SEARCH_API_KEY ? env.SEARCH_PROVIDER : 'off'} · Supabase: ${env.SUPABASE_URL ? 'on' : 'off'}`);
+  console.log(`  AI: ${router.configured().join(', ') || 'off'} · Scorecard: ${env.SCORECARD_API_KEY ? 'on' : 'off'} · Search: ${env.SEARCH_PROVIDER && env.SEARCH_API_KEY ? env.SEARCH_PROVIDER : 'off'} · Supabase: ${env.SUPABASE_URL ? 'on' : 'off'}`);
 });
