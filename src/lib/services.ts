@@ -103,7 +103,9 @@ export const library = {
   answer: (q: string, opts: { category?: string; collegeId?: string } = {}) => post<{ text: string | null; mode: string; note?: string; citations: { n: number; sourceId: string; title: string; url: string; organization: string | null; tier: number; dataYear: string | null; lastVerified: string | null; used: boolean }[] }>('/api/library/answer', { q, ...opts }),
   stats: () => post<{ configured: boolean; total?: number; verified?: number; link_ok?: number; listed?: number; broken?: number; stale?: number; with_text?: number; by_tier?: Record<string, number>; by_category?: Record<string, number>; last_ingested?: string }>('/api/library/stats', {}),
 };
+export interface PlanPrice { amount: number | null; currency: string; interval: string | null; intervalCount: number }
 export const billing = {
+  prices: () => post<{ configured: boolean; plans: Partial<Record<'plus' | 'pro' | 'ultimate', Partial<Record<'monthly' | 'annual', PlanPrice>>>> }>('/api/billing/prices', {}),
   checkout: (plan: 'plus' | 'pro' | 'ultimate', period: 'monthly' | 'annual') => post<{ url: string }>('/api/billing/checkout', { plan, period }),
   portal: () => post<{ url: string }>('/api/billing/portal', {}),
   invoices: () => post<{ invoices: { id: string; number: string; amount: number; currency: string; status: string; created: string; pdf: string; url: string }[] }>('/api/billing/invoices', {}),

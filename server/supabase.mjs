@@ -21,7 +21,9 @@ export function createSupabase(env, { fetchImpl = globalThis.fetch } = {}) {
   /** Verify a user's access token with Supabase Auth. Returns { id, email } or null. */
   async function getUser(token) {
     if (!enabled || !token) return null;
-    const r = await fetchImpl(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, apikey: anon } });
+    let r;
+    try { r = await fetchImpl(`${url}/auth/v1/user`, { signal: AbortSignal.timeout(10_000), headers: { authorization: `Bearer ${token}`, apikey: anon } }); }
+    catch (e) { throw Object.assign(new Error('The sign-in service is unreachable right now. Try again in a moment.'), { status: 503 }); }
     if (!r.ok) return null;
     const u = await r.json();
     return u?.id ? { id: u.id, email: u.email || null } : null;

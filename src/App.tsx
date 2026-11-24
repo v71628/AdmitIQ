@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import {
   LuLayoutDashboard, LuSearch, LuGitCompare, LuListChecks, LuTarget, LuFileText, LuCalculator, LuAward, LuCalendarDays,
   LuFlaskConical, LuSettings, LuDatabase, LuUser, LuMessageSquare, LuUsers, LuMenu, LuX, LuGraduationCap, LuEllipsis, LuMic, LuBookOpen, LuSearch as LuSearchIcon,
+  LuMessagesSquare, LuLibrary, LuCreditCard,
 } from 'react-icons/lu';
 import { Assistant, VoiceFab, openAssistant } from './components/assistant';
 import Interview from './pages/Interview';
@@ -33,14 +34,18 @@ import Research from './pages/Research';
 import Community from './pages/Community';
 import Preferences from './pages/Preferences';
 import DataPage from './pages/DataPage';
+import Advisor from './pages/Advisor';
+import Library from './pages/Library';
+import Pricing from './pages/Pricing';
+import Admin from './pages/Admin';
 
 export const NAV = [
   { group: 'Overview', items: [{ id: 'dashboard', label: 'Dashboard', icon: LuLayoutDashboard }, { id: 'profile', label: 'Profile', icon: LuUser }] },
   { group: 'Colleges', items: [{ id: 'colleges', label: 'College search', icon: LuSearch }, { id: 'compare', label: 'Compare', icon: LuGitCompare }, { id: 'list', label: 'My college list', icon: LuListChecks }, { id: 'analysis', label: 'Admissions analysis', icon: LuTarget }] },
-  { group: 'Apply', items: [{ id: 'essays', label: 'Essay lab', icon: LuFileText }, { id: 'interview', label: 'Interview coach', icon: LuMic }, { id: 'tracker', label: 'Application tracker', icon: LuCalendarDays }, { id: 'strategist', label: 'AI strategist', icon: LuMessageSquare }] },
+  { group: 'Apply', items: [{ id: 'essays', label: 'Essay lab', icon: LuFileText }, { id: 'interview', label: 'Interview coach', icon: LuMic }, { id: 'tracker', label: 'Application tracker', icon: LuCalendarDays }, { id: 'advisor', label: 'AI advisor', icon: LuMessagesSquare }, { id: 'strategist', label: 'AI strategist', icon: LuMessageSquare }] },
   { group: 'Pay', items: [{ id: 'costs', label: 'Cost calculator', icon: LuCalculator }, { id: 'scholarships', label: 'Scholarships', icon: LuAward }] },
-  { group: 'Research', items: [{ id: 'research', label: 'Research center', icon: LuFlaskConical }, { id: 'community', label: 'Student experiences', icon: LuUsers }, { id: 'glossary', label: 'Glossary', icon: LuBookOpen }] },
-  { group: 'Account', items: [{ id: 'preferences', label: 'Settings', icon: LuSettings }, { id: 'data', label: 'Data & privacy', icon: LuDatabase }] },
+  { group: 'Research', items: [{ id: 'research', label: 'Research center', icon: LuFlaskConical }, { id: 'library', label: 'Source library', icon: LuLibrary }, { id: 'community', label: 'Student experiences', icon: LuUsers }, { id: 'glossary', label: 'Glossary', icon: LuBookOpen }] },
+  { group: 'Account', items: [{ id: 'pricing', label: 'Plans & billing', icon: LuCreditCard }, { id: 'preferences', label: 'Settings', icon: LuSettings }, { id: 'data', label: 'Data & privacy', icon: LuDatabase }] },
 ];
 const MOBILE_TABS = [{ id: 'dashboard', label: 'Home', icon: LuLayoutDashboard }, { id: 'colleges', label: 'Search', icon: LuSearch }, { id: 'list', label: 'List', icon: LuListChecks }, { id: 'essays', label: 'Essays', icon: LuFileText }];
 
@@ -112,6 +117,10 @@ function Page({ route }: { route: string }) {
     case 'data': return <DataPage />;
     case 'interview': return <Interview />;
     case 'glossary': return <Glossary />;
+    case 'advisor': return <Advisor />;
+    case 'library': return <Library />;
+    case 'pricing': case 'billing': return <Pricing />;
+    case 'admin': return <Admin />;
     default: return <NotFound />;
   }
 }

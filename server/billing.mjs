@@ -17,7 +17,7 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
 
   async function stripe(path, params, method = 'POST') {
     if (!enabled) throw Object.assign(new Error('Payments are not configured on this server (STRIPE_SECRET_KEY is missing).'), { status: 503 });
-    const r = await fetchImpl(`https://api.stripe.com/v1/${path}${method === 'GET' && params ? `?${form(params)}` : ''}`, { method, signal: AbortSignal.timeout(20_000), headers: { authorization: `Bearer ${key}`, 'content-type': 'application/x-www-form-urlencoded' }, body: method === 'GET' ? undefined : form(params || {}) });
+    const r = await fetchImpl(`${(env.STRIPE_BASE || 'https://api.stripe.com').replace(/\/$/, '')}/v1/${path}${method === 'GET' && params ? `?${form(params)}` : ''}`, { method, signal: AbortSignal.timeout(20_000), headers: { authorization: `Bearer ${key}`, 'content-type': 'application/x-www-form-urlencoded' }, body: method === 'GET' ? undefined : form(params || {}) });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error(`Stripe: ${d?.error?.message || r.status}`), { status: 502 });
     return d;
@@ -98,5 +98,24 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
     return { handled: false, type: evt.type };
   }
 
-  return { enabled, checkout, portal, invoices, handleWebhook, verifySignature, _form: form };
+  // Real prices, read from Stripe (never hard-coded), cached for 10 minutes.
+  let priceCache = { at: 0, data: null };
+  async function prices() {
+    if (!enabled) return { configured: false, plans: {} };
+    if (priceCache.data && Date.now() - priceCache.at < 600_000) return priceCache.data;
+    const plans = {};
+    for (const plan of ['plus', 'pro', 'ultimate']) for (const period of ['monthly', 'annual']) {
+      const id = env[`STRIPE_PRICE_${plan.toUpperCase()}_${period.toUpperCase()}`];
+      if (!id) continue;
+      try {
+        const p = await stripe(`prices/${encodeURIComponent(id)}`, null, 'GET');
+        if (p.active === false) continue;
+        (plans[plan] ||= {})[period] = { amount: p.unit_amount, currency: p.currency, interval: p.recurring?.interval || null, intervalCount: p.recurring?.interval_count || 1 };
+      } catch { /* price missing or wrong mode: leave it out */ }
+    }
+    priceCache = { at: Date.now(), data: { configured: true, plans } };
+    return priceCache.data;
+  }
+
+  return { enabled, checkout, portal, invoices, prices, handleWebhook, verifySignature, _form: form };
 }

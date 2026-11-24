@@ -473,6 +473,7 @@ const server = http.createServer(async (req, res) => {
         const [stats] = await supabase.rpc('source_library_stats', {}).then((r) => (Array.isArray(r) ? r : [r]));
         return json(res, 200, { configured: true, ...stats });
       }
+      if (url.pathname === '/api/billing/prices') return json(res, 200, await billing.prices());
       if (url.pathname.startsWith('/api/billing/')) {
         if (!user.id) throw httpError(401, 'Sign in to manage billing.');
         if (url.pathname === '/api/billing/checkout') return json(res, 200, await billing.checkout(user, body));

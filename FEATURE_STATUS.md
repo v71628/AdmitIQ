@@ -3,9 +3,15 @@
 Updated 24 Nov 2026. Legend: ✅ done and tested · 🟡 partial · ⛔ blocked (reason given) · ⬜ not started.
 "Tested" means automated tests in this repo pass (`npm test`, `npm run db:test`). It does **not** mean the feature was exercised with real API keys or a real Supabase project, because none were available during development.
 
-## Why the frontend wasn't changed in this pass
+## New pages (second pass)
 
-This pass ran in an environment where the npm registry was blocked. React, esbuild and Tailwind couldn't be installed, so **the frontend couldn't be built, run or visually checked.** Shipping UI code that has never rendered would break the brief's "no dead buttons, no fake features" rule. So this pass built the **server, database, AI and data layers**, all of which are dependency-free Node or SQL and fully tested. It also extended the typed client (`src/lib/services.ts`, type-checked) so the UI work is wiring rather than plumbing. The UI phases are next on the roadmap.
+Built, bundled and checked in a real browser against mock AI, Supabase and Stripe servers, at desktop and phone widths:
+- **AI advisor** (`#advisor`): streaming answers with three modes (quick, deep analysis, research with web citations). Conversations are saved in the browser, with folders, rename, search, saved answers and Markdown export. A profile-context toggle controls what's shared, and every answer shows which provider and model wrote it.
+- **Source library** (`#library`): real counts from the database, search and category filters, reliability tier, data year and freshness on every record, and "answer from these sources" with citations to real records.
+- **Plans & billing** (`#pricing`): four tiers, with prices read live from Stripe (never hard-coded), checkout, the billing portal, invoices and today's AI usage meter.
+- **Admin** (`#admin`): real database counts, AI provider health, usage and cost by provider, task and model, routing, and recent errors. Restricted to `ADMIN_EMAILS`.
+
+Each page explains itself when its service isn't configured. None shows fake data.
 
 ## 1–2 · Stack and AI system
 | Item | Status | Notes |
@@ -31,7 +37,7 @@ This pass ran in an environment where the npm registry was blocked. React, esbui
 | Hybrid RAG (pgvector + full-text, reciprocal-rank fusion, tier boost) | ✅ SQL · 🟡 | Full-text version tested; the pgvector version (`0003`) needs the extension on Supabase |
 | RAG answers citing real `sources.id` rows | ✅ | `/api/library/answer` |
 | Discrepancies stored, not hidden | ✅ schema + `findConflicts()` | Shown in the UI: ⬜ |
-| Source library UI (search, filters, citation previews, counts) | ⬜ | Client API ready (`library.*`) |
+| Source library UI (search, filters, citation previews, counts) | ✅ | `#library` |
 | Tier 2–4 collection, Common Data Sets | ⬜ | Deliberately not bulk-scraped; see DATA_SOURCES.md |
 
 ## 4 · College database
@@ -59,7 +65,7 @@ This pass ran in an environment where the npm registry was blocked. React, esbui
 | Rule-based, explainable admissions analysis (v1) | ✅ existing | `src/lib/analysis.ts`; no probabilities |
 | AI-assisted evaluation and committee simulation backend | 🟡 | Tasks `analysis` and `simulation` (Pro) routed and gated; `admissions_evaluations` table. Prompts and UI ⬜ |
 | Persistent conversations, folders, memory controls | 🟡 schema | `ai_conversations`, `ai_messages`, `conversation_folders`, `ai_memory_settings` with RLS. UI ⬜ |
-| Streaming, citations, verification in the advisor | 🟡 backend ✅ | UI ⬜ |
+| Streaming, citations, conversation history in the advisor | ✅ | `#advisor` (history is stored in the browser; syncing it to Supabase tables is ⬜) |
 
 ## 9–14 · Search, list builder, comparison, essay lab, careers, analytics
 | Item | Status | Notes |
@@ -76,7 +82,7 @@ This pass ran in an environment where the npm registry was blocked. React, esbui
 | Google login | ⬜ | Supabase setting plus a button |
 | Server verifies the user token and looks up the plan | ✅ | Cached for 60 s |
 | Stripe checkout, portal, invoices, signed webhooks, plan sync | ✅ backend | Signature verification tested. Says "not configured" without keys |
-| Pricing and billing pages | ⬜ | Client API ready (`billing.*`) |
+| Pricing and billing pages | ✅ | `#pricing`, with live Stripe prices |
 
 ## 17–19 · Dashboard, design, animation
 ⬜ for V2. The v1 dashboard and design remain. These phases need a working build (see the top of this file).
@@ -85,7 +91,7 @@ This pass ran in an environment where the npm registry was blocked. React, esbui
 | Item | Status | Notes |
 |---|---|---|
 | All requested tables, indexes, RLS, migrations | ✅ | Tested: idempotent, RLS blocks access across users, ai_messages ownership check |
-| Admin stats (users, plans, colleges, majors, careers, verified sources, failed ingestion, AI usage and cost) | ✅ backend | `admin_dashboard_stats()`, `/api/admin/status`. UI ⬜ |
+| Admin stats (users, plans, colleges, majors, careers, verified sources, failed ingestion, AI usage and cost) | ✅ | `#admin` |
 | Server-only secrets, validated inputs, rate limits, quotas, CSP | ✅ | `/api/health` exposes no secrets (tested) |
 
 ## 23 · Testing
