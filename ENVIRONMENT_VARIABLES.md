@@ -64,5 +64,6 @@ Everything is optional. Without any variables set, AdmitIQ runs in local mode an
 | 🔒 `STRIPE_WEBHOOK_SECRET` | Verifies `POST /api/billing/webhook` (HMAC-SHA256, 5-minute tolerance) |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Publishable key. Not secret |
 | `STRIPE_PRICE_{PLUS,PRO,ULTIMATE}_{MONTHLY,ANNUAL}` | Stripe Price IDs for each plan and billing period |
+| `STRIPE_TRIAL_DAYS_{PLUS,PRO,ULTIMATE}` | Free-trial days added at checkout. Pro defaults to `7`; Plus and Ultimate default to none. Set `0` to turn a trial off |
 
 `SEARCH_API_KEY` in the original brief is the same `SEARCH_API_KEY` listed above.

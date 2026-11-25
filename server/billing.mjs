@@ -37,6 +37,13 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
     return c.id;
   }
 
+  // Free trial length per plan: STRIPE_TRIAL_DAYS_<PLAN>. Pro defaults to 7 days; others to none.
+  function trialDays(plan) {
+    const v = env[`STRIPE_TRIAL_DAYS_${String(plan).toUpperCase()}`];
+    const n = v === undefined || v === '' ? (plan === 'pro' ? 7 : 0) : Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.floor(n), 730) : 0;
+  }
+
   async function checkout(user, { plan, period = 'monthly' }) {
     if (!['plus', 'pro', 'ultimate'].includes(plan)) throw Object.assign(new Error('Unknown plan'), { status: 400 });
     if (!['monthly', 'annual'].includes(period)) throw Object.assign(new Error('Unknown billing period'), { status: 400 });
@@ -44,15 +51,16 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
     const s = await stripe('checkout/sessions', {
       mode: 'subscription', customer, client_reference_id: user.id,
       line_items: { 0: { price: priceFor(plan, period), quantity: 1 } },
-      success_url: `${appUrl}/#/billing?status=success`, cancel_url: `${appUrl}/#/pricing?status=cancelled`,
-      allow_promotion_codes: 'true', subscription_data: { metadata: { user_id: user.id } },
+      success_url: `${appUrl}/#billing?status=success`, cancel_url: `${appUrl}/#pricing?status=cancelled`,
+      allow_promotion_codes: 'true',
+      subscription_data: { metadata: { user_id: user.id }, ...(trialDays(plan) > 0 ? { trial_period_days: String(trialDays(plan)) } : {}) },
     });
     return { url: s.url };
   }
 
   async function portal(user) {
     const customer = await customerFor(user);
-    const s = await stripe('billing_portal/sessions', { customer, return_url: `${appUrl}/#/billing` });
+    const s = await stripe('billing_portal/sessions', { customer, return_url: `${appUrl}/#billing` });
     return { url: s.url };
   }
 
@@ -101,7 +109,7 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
   // Real prices, read from Stripe (never hard-coded), cached for 10 minutes.
   let priceCache = { at: 0, data: null };
   async function prices() {
-    if (!enabled) return { configured: false, plans: {} };
+    if (!enabled) return { configured: false, plans: {}, trials: {} };
     if (priceCache.data && Date.now() - priceCache.at < 600_000) return priceCache.data;
     const plans = {};
     for (const plan of ['plus', 'pro', 'ultimate']) for (const period of ['monthly', 'annual']) {
@@ -113,9 +121,10 @@ export function createBilling(env, supabase, { fetchImpl = globalThis.fetch } = 
         (plans[plan] ||= {})[period] = { amount: p.unit_amount, currency: p.currency, interval: p.recurring?.interval || null, intervalCount: p.recurring?.interval_count || 1 };
       } catch { /* price missing or wrong mode: leave it out */ }
     }
-    priceCache = { at: Date.now(), data: { configured: true, plans } };
+    const trials = Object.fromEntries(['plus', 'pro', 'ultimate'].map((p) => [p, trialDays(p)]).filter(([, d]) => d > 0));
+    priceCache = { at: Date.now(), data: { configured: true, plans, trials } };
     return priceCache.data;
   }
 
-  return { enabled, checkout, portal, invoices, prices, handleWebhook, verifySignature, _form: form };
+  return { enabled, trialDays, checkout, portal, invoices, prices, handleWebhook, verifySignature, _form: form };
 }
