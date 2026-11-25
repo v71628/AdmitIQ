@@ -10,6 +10,8 @@ Everything is optional. Without any variables set, AdmitIQ runs in local mode an
 |---|---|---|
 | `PORT` | `8787` | HTTP port |
 | `APP_URL` | `http://localhost:PORT` | Public URL, used for Stripe redirect URLs |
+| `CORS_ORIGINS` | `https://admitiq.github.io` | Comma-separated sites allowed to call this server's `/api` from the browser (the static GitHub Pages copy). Set empty to allow none |
+| `ADMITIQ_API` | — | **Build-time** (`npm run build`), not server: the https origin of the AdmitIQ server a static copy should call, e.g. `https://admitiq-zvxk.onrender.com` |
 | `TRUST_PROXY` | `false` | Use `X-Forwarded-For` for rate limiting when the server runs behind a proxy |
 | `RATE_LIMIT_PER_MIN` | `20` | Requests per minute per IP on AI and research routes |
 | `ADMITIQ_CONTACT` | – | Contact address placed in the research and ingestion User-Agent |

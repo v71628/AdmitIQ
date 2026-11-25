@@ -4,6 +4,7 @@
 //  • Text-to-speech: the browser's speechSynthesis (free, on-device).
 // Audio never leaves the device in browser mode; in server mode it goes only to the configured provider.
 import { useEffect, useRef, useState } from 'react';
+import { apiUrl } from './services';
 
 type SR = {
   lang: string; continuous: boolean; interimResults: boolean; maxAlternatives: number;
@@ -115,7 +116,7 @@ export function useListener({ onFinal, continuous = false, serverTranscribe = fa
 async function transcribe(blob: Blob): Promise<string> {
   let token = '';
   try { token = JSON.parse(localStorage.getItem('admitiq:session') || 'null')?.access_token || ''; } catch { /* ignore */ }
-  const r = await fetch('/api/transcribe', { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: blob });
+  const r = await fetch(apiUrl('/api/transcribe'), { method: 'POST', headers: { 'content-type': blob.type || 'audio/webm', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: blob });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || `Transcription failed (${r.status})`);
   return String(d.text || '').trim();

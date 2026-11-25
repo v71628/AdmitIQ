@@ -46,7 +46,10 @@ const mod = await import('data:text/javascript;base64,' + Buffer.from(dataOut.ou
 fs.writeFileSync(path.join(dist, 'colleges.json'), JSON.stringify(mod.COLLEGES));
 
 // 3) HTML shell
-const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
+// ADMITIQ_API=https://… builds a static copy (e.g. GitHub Pages) that talks to that AdmitIQ server.
+const apiBase = (process.env.ADMITIQ_API || '').trim().replace(/\/$/, '');
+if (apiBase && !/^(https:\/\/[\w.-]+|http:\/\/(localhost|127\.0\.0\.1))(:\d+)?$/.test(apiBase)) throw new Error(`ADMITIQ_API must be an https origin, got ${apiBase}`);
+const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8').replace('<head>', () => (apiBase ? `<head>\n  <meta name="admitiq-api" content="${apiBase}" />` : '<head>'));
 fs.writeFileSync(path.join(dist, 'index.html'), html);
 if (process.argv.includes('--single')) {
   const js = fs.readFileSync(path.join(dist, 'app.js'), 'utf8').replace(/<\/script/gi, '<\\/script');

@@ -11,16 +11,21 @@ export interface ServerCaps {
   supabase: { url: string; anonKey: string } | null;
 }
 
+// Where the AdmitIQ server lives. Same origin when served by server/server.mjs; a full URL (from
+// <meta name="admitiq-api">) when this is the static copy on GitHub Pages.
+export const API_BASE = (typeof document !== 'undefined' ? document.querySelector<HTMLMetaElement>('meta[name="admitiq-api"]')?.content || '' : '').replace(/\/$/, '');
+export const apiUrl = (path: string) => `${API_BASE}${path}`;
+
 let capsPromise: Promise<ServerCaps | null> | null = null;
 export function serverCaps(): Promise<ServerCaps | null> {
   if (!capsPromise) {
     capsPromise = (async () => {
       // Only probe when served by server/server.mjs (it injects this meta tag); static hosts skip the request.
-      if (typeof document !== 'undefined' && !document.querySelector('meta[name="admitiq-server"]')) return null;
+      if (typeof document !== 'undefined' && !API_BASE && !document.querySelector('meta[name="admitiq-server"]')) return null;
       try {
         const ctl = new AbortController();
-        const t = setTimeout(() => ctl.abort(), 2500);
-        const r = await fetch('/api/health', { signal: ctl.signal });
+        const t = setTimeout(() => ctl.abort(), API_BASE ? 60_000 : 2500); // a sleeping free-tier server can take ~50s to wake
+        const r = await fetch(apiUrl('/api/health'), { signal: ctl.signal });
         clearTimeout(t);
         if (!r.ok) return null;
         return (await r.json()) as ServerCaps;
@@ -35,7 +40,7 @@ export class ApiError extends Error {
   constructor(message: string, public status: number, public code?: string) { super(message); }
 }
 async function post<T>(path: string, body: unknown, token: string | undefined = session?.access_token): Promise<T> {
-  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+  const r = await fetch(apiUrl(path), { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new ApiError((data as { error?: string }).error || `Request failed (${r.status})`, r.status, (data as { code?: string }).code);
   return data as T;
@@ -49,7 +54,7 @@ export interface Usage { plan: string; limit: number; used: number }
 
 /** Stream an AI reply over Server-Sent Events. Calls onDelta for each text chunk; resolves with provider/model/usage. */
 async function stream(messages: ChatMessage[], task: AITask, onDelta: (text: string) => void, signal?: AbortSignal) {
-  const r = await fetch('/api/ai/stream', { method: 'POST', signal, headers: { 'content-type': 'application/json', ...(session ? { authorization: `Bearer ${session.access_token}` } : {}) }, body: JSON.stringify({ messages, task }) });
+  const r = await fetch(apiUrl('/api/ai/stream'), { method: 'POST', signal, headers: { 'content-type': 'application/json', ...(session ? { authorization: `Bearer ${session.access_token}` } : {}) }, body: JSON.stringify({ messages, task }) });
   if (!r.ok || !r.body) { const d = await r.json().catch(() => ({})); throw new ApiError((d as { error?: string }).error || `Request failed (${r.status})`, r.status, (d as { code?: string }).code); }
   const reader = r.body.getReader(); const dec = new TextDecoder();
   let buf = '', done: { provider: string; model: string; usage: { input: number; output: number }; remaining: Usage } | null = null;

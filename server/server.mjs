@@ -416,7 +416,18 @@ export { server, router, billing };
 let bundledColleges = [];
 try { bundledColleges = JSON.parse(fs.readFileSync(path.join(DIST, 'colleges.json'), 'utf8')); } catch { /* built by build script */ }
 
+// The static copy of the app on GitHub Pages calls this server from another origin.
+const CORS_ORIGINS = new Set((env.CORS_ORIGINS ?? 'https://admitiq.github.io').split(',').map((s) => s.trim().replace(/\/$/, '')).filter(Boolean));
 const server = http.createServer(async (req, res) => {
+  const origin = String(req.headers.origin || '');
+  if (origin && CORS_ORIGINS.has(origin) && String(req.url || '').startsWith('/api/')) {
+    res.setHeader('access-control-allow-origin', origin);
+    res.setHeader('vary', 'Origin');
+    res.setHeader('access-control-allow-headers', 'content-type, authorization');
+    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+    res.setHeader('access-control-max-age', '600');
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+  }
   const ip = (env.TRUST_PROXY === 'true' && String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()) || req.socket.remoteAddress || 'local';
   const url = new URL(req.url, 'http://localhost');
   try {
