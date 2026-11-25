@@ -94,7 +94,7 @@ export default function Costs() {
                 <div className="grid gap-4 xl:grid-cols-2">
                   <ChartCard title="Cost breakdown per year" desc="Before aid." source={SRC} legend={[{ label: 'Tuition & fees', color: 'var(--c1)' }, { label: 'Housing & meals', color: 'var(--c2)' }, { label: 'Transportation', color: 'var(--c3)' }, { label: 'Books', color: 'var(--c4)' }, { label: 'Personal', color: 'var(--c6)' }]}>
                     <StackedBars format={usd} keys={[{ key: 't', label: 'Tuition & fees', color: 'var(--c1)' }, { key: 'h', label: 'Housing & meals', color: 'var(--c2)' }, { key: 'tr', label: 'Transportation', color: 'var(--c3)' }, { key: 'b', label: 'Books', color: 'var(--c4)' }, { key: 'p', label: 'Personal', color: 'var(--c6)' }]}
-                      rows={results.map((r) => ({ label: r.college.short, total: r.gross, parts: r.tuition === null ? {} : { t: r.tuition, h: r.housing, tr: r.transport, b: r.books, p: r.personal } }))} />
+                      rows={results.map((r) => ({ label: r.college.short, total: r.gross, parts: (r.tuition === null ? {} : { t: r.tuition, h: r.housing, tr: r.transport, b: r.books, p: r.personal }) as Record<string, number> }))} />
                   </ChartCard>
                   <ChartCard title="Net price comparison" desc={budget ? `Your budget: ${usd(budget)}/yr` : 'Sticker price minus the aid you entered.'} source={SRC}>
                     <div className="space-y-4">

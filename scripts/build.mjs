@@ -50,7 +50,8 @@ const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8');
 fs.writeFileSync(path.join(dist, 'index.html'), html);
 if (process.argv.includes('--single')) {
   const js = fs.readFileSync(path.join(dist, 'app.js'), 'utf8').replace(/<\/script/gi, '<\\/script');
-  const single = html.replace('<link rel="stylesheet" href="app.css" />', `<style>${outCss}</style>`).replace('<script src="app.js" defer></script>', '').replace('</body>', `<script>${js}</script></body>`);
+  // Function replacers: a string replacement would expand $&, $` and $' sequences inside the bundle.
+  const single = html.replace('<link rel="stylesheet" href="app.css" />', () => `<style>${outCss}</style>`).replace('<script src="app.js" defer></script>', '').replace('</body>', () => `<script>${js}</script></body>`);
   fs.writeFileSync(path.join(dist, 'admitiq.html'), single);
 }
 // Security headers for static hosts that read a _headers file (Netlify, Cloudflare Pages).

@@ -36,7 +36,7 @@ export default function Interview() {
   const college = COLLEGES.find((c) => c.id === collegeId) || null;
   const listener = useListener({ continuous: true, serverTranscribe: !!caps?.ai?.transcribe, onFinal: (t) => setText((x) => (x ? `${x} ${t}` : t)) });
   const voiceInput = listener.supported && !typed;
-  const timer = useRef<ReturnType<typeof setInterval>>();
+  const timer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   useEffect(() => () => { stopSpeaking(); clearInterval(timer.current); }, []);
 
   const q = qs[i];

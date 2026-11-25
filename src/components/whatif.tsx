@@ -58,7 +58,7 @@ export function WhatIf({ s }: { s: AppState }) {
               <li key={c.id} className={cx('flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm transition-colors', delta > 0 && 'bg-teal-500/[0.06]', delta < 0 && 'bg-rose-500/[0.05]')}>
                 <a href={`#college-${c.id}`} className="min-w-0 flex-1 truncate font-medium text-ink hover:text-accent">{c.short}</a>
                 <Badge tone={bucketTone(now.bucket)}>{now.bucket}</Badge>
-                <LuArrowRight className={cx('text-muted', delta && 'text-ink')} />
+                <LuArrowRight className={cx('text-muted', delta !== 0 && 'text-ink')} />
                 <Badge tone={bucketTone(then.bucket)}>{then.bucket}</Badge>
                 {then.competitiveness !== now.competitiveness && <span className="w-full text-xs text-muted sm:w-auto">{now.competitiveness} → <b className="text-ink">{then.competitiveness}</b></span>}
               </li>
