@@ -9,6 +9,7 @@
 
 import http from 'node:http';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRouter, COMPAT, AIError } from './ai/router.mjs';
@@ -397,6 +398,18 @@ const SECURITY_HEADERS = {
   'content-security-policy': ["default-src 'self'", "script-src 'self' 'unsafe-inline'", "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com", "font-src https://fonts.gstatic.com", "img-src 'self' data: blob:", `connect-src 'self' ${env.SUPABASE_URL || ''} https://checkout.stripe.com`.trim(), "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'"].join('; '),
 };
 function send(res, status, body, headers = {}) { res.writeHead(status, { ...SECURITY_HEADERS, ...headers }); res.end(body); }
+const assetVersions = new Map();
+function assetVersion(name) {
+  const file = path.join(DIST, name);
+  try {
+    const { mtimeMs, size } = fs.statSync(file);
+    const hit = assetVersions.get(name);
+    if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.v;
+    const v = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex').slice(0, 12);
+    assetVersions.set(name, { mtimeMs, size, v });
+    return v;
+  } catch { return '0'; }
+}
 const json = (res, status, obj) => send(res, status, JSON.stringify(obj), { 'content-type': 'application/json', 'cache-control': 'no-store' });
 
 export { server, router, billing };
@@ -528,8 +541,11 @@ const server = http.createServer(async (req, res) => {
     if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) return send(res, 404, 'Not found', { 'content-type': 'text/plain' });
     const ext = path.extname(file);
     let data = fs.readFileSync(file);
-    if (ext === '.html') data = Buffer.from(data.toString('utf8').replace('<head>', '<head>\n  <meta name="admitiq-server" content="1" />'));
-    return send(res, 200, data, { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-cache' : 'public, max-age=3600' });
+    // HTML is never cached and points at app.js / app.css with a content hash, so every deploy reaches
+    // returning visitors immediately while the hashed assets themselves can be cached for a long time.
+    if (ext === '.html') data = Buffer.from(data.toString('utf8').replace('<head>', '<head>\n  <meta name="admitiq-server" content="1" />').replace(/(href|src)="(app\.(?:js|css))"/g, (_, attr, name) => `${attr}="${name}?v=${assetVersion(name)}"`));
+    const versioned = url.searchParams.has('v') && url.searchParams.get('v') === assetVersion(path.basename(file));
+    return send(res, 200, data, { 'content-type': MIME[ext] || 'application/octet-stream', 'cache-control': ext === '.html' ? 'no-cache' : versioned ? 'public, max-age=31536000, immutable' : 'no-cache' });
   } catch (e) {
     const status = e.status || (e.name === 'TimeoutError' ? 504 : 500);
     if (status >= 500) console.error('[admitiq]', e.message);
