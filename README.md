@@ -8,6 +8,15 @@ It is designed to be **free to run**: every core feature works in the browser wi
 
 ---
 
+## V2 (in progress)
+
+V2 adds a multi-provider AI router (OpenAI as primary, Gemini with Google Search grounding, optional Claude), streaming, verification, quotas and cost tracking. It also adds a Supabase schema for a 37,000-record official source library with hybrid pgvector RAG, plus ingestion of all 6,163 IPEDS institutions, 2,028 CIP majors and 343 BLS careers, and Stripe billing.
+
+- **[FEATURE_STATUS.md](FEATURE_STATUS.md)**: what is done, partial or blocked. Read this first.
+- [SETUP.md](SETUP.md) · [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md) · [AI_ARCHITECTURE.md](AI_ARCHITECTURE.md) · [DATA_SOURCES.md](DATA_SOURCES.md) · [ROADMAP.md](ROADMAP.md)
+
+---
+
 ## Quick start
 
 ```bash

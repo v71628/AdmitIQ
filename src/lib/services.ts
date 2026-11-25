@@ -5,8 +5,9 @@
 export interface ServerCaps {
   directory?: { colleges: boolean; highSchools: boolean; stats: boolean } | null;
   reviews?: boolean;
-  ai: { provider: string; model: string; transcribe?: boolean } | null;
-  research: { search: string | null; scorecard: boolean };
+  ai: { provider: string; model: string; providers?: string[]; grounding?: boolean; streaming?: boolean; transcribe?: boolean } | null;
+  research: { search: string | null; scorecard: boolean; grounding?: boolean; library?: boolean; embeddings?: boolean };
+  billing?: boolean;
   supabase: { url: string; anonKey: string } | null;
 }
 
@@ -29,21 +30,59 @@ export function serverCaps(): Promise<ServerCaps | null> {
   return capsPromise;
 }
 
+/** Error from the AdmitIQ server. `code` is 'quota' | 'plan_required' | 'budget' | 'unconfigured' when relevant. */
+export class ApiError extends Error {
+  constructor(message: string, public status: number, public code?: string) { super(message); }
+}
 async function post<T>(path: string, body: unknown, token: string | undefined = session?.access_token): Promise<T> {
   const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((data as { error?: string }).error || `Request failed (${r.status})`);
+  if (!r.ok) throw new ApiError((data as { error?: string }).error || `Request failed (${r.status})`, r.status, (data as { code?: string }).code);
   return data as T;
 }
 
+export type AITask = 'chat' | 'analysis' | 'essay' | 'simulation' | 'research' | 'long_document' | 'verify';
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string }
+export interface WebCitation { index: number; title: string; url: string }
+export interface AIReply { text: string; provider: string; model: string; citations: WebCitation[]; grounded: boolean; usage: { input: number; output: number }; remaining: Usage }
+export interface Usage { plan: string; limit: number; used: number }
+
+/** Stream an AI reply over Server-Sent Events. Calls onDelta for each text chunk; resolves with provider/model/usage. */
+async function stream(messages: ChatMessage[], task: AITask, onDelta: (text: string) => void, signal?: AbortSignal) {
+  const r = await fetch('/api/ai/stream', { method: 'POST', signal, headers: { 'content-type': 'application/json', ...(session ? { authorization: `Bearer ${session.access_token}` } : {}) }, body: JSON.stringify({ messages, task }) });
+  if (!r.ok || !r.body) { const d = await r.json().catch(() => ({})); throw new ApiError((d as { error?: string }).error || `Request failed (${r.status})`, r.status, (d as { code?: string }).code); }
+  const reader = r.body.getReader(); const dec = new TextDecoder();
+  let buf = '', done: { provider: string; model: string; usage: { input: number; output: number }; remaining: Usage } | null = null;
+  for (;;) {
+    const { value, done: end } = await reader.read();
+    if (end) break;
+    buf += dec.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf('\n\n')) !== -1) {
+      const block = buf.slice(0, i); buf = buf.slice(i + 2);
+      const ev = /^event: (.*)$/m.exec(block)?.[1]; const data = /^data: (.*)$/m.exec(block)?.[1];
+      if (!ev || !data) continue;
+      const j = JSON.parse(data);
+      if (ev === 'delta') onDelta(j.text);
+      else if (ev === 'done') done = j;
+      else if (ev === 'error') throw new ApiError(j.error, j.status || 500);
+    }
+  }
+  if (!done) throw new ApiError('The AI response ended unexpectedly.', 502);
+  return done;
+}
+
 export const ai = {
-  chat: (messages: ChatMessage[], json = false) => post<{ text: string }>('/api/ai', { messages, json }),
+  chat: (messages: ChatMessage[], json = false, task: AITask = 'chat') => post<AIReply>('/api/ai', { messages, json, task }),
+  run: (task: AITask, messages: ChatMessage[], json = false) => post<AIReply>('/api/ai', { messages, json, task }),
+  stream,
+  verify: (question: string, answer: string, sources: { title?: string; url?: string; text?: string }[], usedProvider?: string) => post<{ verdict: string; issues: { claim: string; problem: string }[]; notes: string; provider: string; model: string }>('/api/ai/verify', { question, answer, sources, usedProvider }),
+  usage: () => post<Usage & { signedIn: boolean }>('/api/me/usage', {}),
   async essay(text: string, prompt: string, mode: string) {
     const sys = `You are a careful college essay reviewer. Evaluate the student's essay on these 12 criteria, each scored 1-10: Authenticity, Personal voice, Specificity, Storytelling, Reflection, Emotional resonance, Structure, Clarity, Originality, Prompt fulfillment, Depth, Memorability.
 Rules: Never rewrite the essay in your own voice. Never invent experiences, awards, hardships or details. Quote the student's own words when pointing at problems. Feedback mode: ${mode}.
 Return JSON: {"scores":{criterion:number},"overall":string,"strengths":[string],"weaknesses":[string],"line_feedback":[{"quote":string,"comment":string}],"suggestions":[string]}`;
-    const r = await this.chat([{ role: 'system', content: sys }, { role: 'user', content: `PROMPT:\n${prompt || '(not provided)'}\n\nESSAY:\n${text}` }], true);
+    const r = await this.chat([{ role: 'system', content: sys }, { role: 'user', content: `PROMPT:\n${prompt || '(not provided)'}\n\nESSAY:\n${text}` }], true, 'essay');
     return JSON.parse(r.text.replace(/^```json\s*|```$/g, '')) as { scores: Record<string, number>; overall: string; strengths: string[]; weaknesses: string[]; line_feedback: { quote: string; comment: string }[]; suggestions: string[] };
   },
 };
@@ -53,9 +92,25 @@ export interface ResearchResult {
   steps: { label: string; status: 'done' | 'skipped' | 'error'; detail: string }[];
   findings: { claim: string; value?: string; source: string; url: string; retrieved: string; reportingYear?: string; confidence: 'High' | 'Medium' | 'Low'; official: boolean }[];
   summary: string | null;
+  grounded?: { text: string; citations: WebCitation[]; queries: string[]; model: string } | null;
+  verification?: { verdict: string; issues: { claim: string; problem: string }[]; notes: string; provider: string } | null;
   conflicts: string[];
   uncertainty: string[];
 }
+export interface LibrarySource { id: string; title: string; url: string; organization: string | null; category: string; source_type: string; reliability_tier: 1 | 2 | 3 | 4; data_year: string | null; last_verified_at: string | null; summary: string | null; excerpt: string; score: number }
+export const library = {
+  search: (q: string, opts: { category?: string; collegeId?: string; limit?: number } = {}) => post<{ results: LibrarySource[]; mode: string }>('/api/library/search', { q, ...opts }),
+  answer: (q: string, opts: { category?: string; collegeId?: string } = {}) => post<{ text: string | null; mode: string; note?: string; citations: { n: number; sourceId: string; title: string; url: string; organization: string | null; tier: number; dataYear: string | null; lastVerified: string | null; used: boolean }[] }>('/api/library/answer', { q, ...opts }),
+  stats: () => post<{ configured: boolean; total?: number; verified?: number; link_ok?: number; listed?: number; broken?: number; stale?: number; with_text?: number; by_tier?: Record<string, number>; by_category?: Record<string, number>; last_ingested?: string }>('/api/library/stats', {}),
+};
+export interface PlanPrice { amount: number | null; currency: string; interval: string | null; intervalCount: number }
+export const billing = {
+  prices: () => post<{ configured: boolean; plans: Partial<Record<'plus' | 'pro' | 'ultimate', Partial<Record<'monthly' | 'annual', PlanPrice>>>> }>('/api/billing/prices', {}),
+  checkout: (plan: 'plus' | 'pro' | 'ultimate', period: 'monthly' | 'annual') => post<{ url: string }>('/api/billing/checkout', { plan, period }),
+  portal: () => post<{ url: string }>('/api/billing/portal', {}),
+  invoices: () => post<{ invoices: { id: string; number: string; amount: number; currency: string; status: string; created: string; pdf: string; url: string }[] }>('/api/billing/invoices', {}),
+};
+export const admin = { status: () => post<Record<string, unknown>>('/api/admin/status', {}) };
 export interface DirCollege { unitid: string; name: string; city: string; state: string; control: string; web: string; lat: number | null; lon: number | null; level: string }
 export interface HighSchool { id: string; name: string; city: string; state: string; charter: boolean; enrollment: number | null }
 export interface WebReviews { themes: { label: string; tone: 'positive' | 'mixed' | 'negative'; summary: string; sources: number[] }[]; summary: string | null; sources: { title: string; url: string; domain: string; snippet: string }[]; retrieved?: string; note: string }
@@ -67,7 +122,7 @@ export const directory = {
 };
 
 export const research = {
-  ask: (question: string, collegeIds: string[]) => post<ResearchResult>('/api/research', { question, collegeIds }),
+  ask: (question: string, collegeIds: string[], verify = false) => post<ResearchResult>('/api/research', { question, collegeIds, verify }),
   scorecard: (name: string) => post<{ results: Record<string, unknown>[]; retrieved: string; url: string }>('/api/scorecard', { name }),
 };
 

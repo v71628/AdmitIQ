@@ -183,7 +183,7 @@ export function fit(c: College, s: AppState): Fit {
   const m = s.profile.intendedMajor;
   if (m) { if (c.majors.includes(m)) { score += 12; reasons.push(`Offers ${m}`); } else { score -= 25; concerns.push(`${m} not listed`); } }
   const p = s.personal;
-  if (p.settings.length) { if (p.settings.includes(c.setting)) { score += 8; reasons.push(`${c.setting} setting`); } else { score -= 6; concerns.push(`${c.setting} setting`); } }
+  if (p.settings.length) { if ((p.settings as string[]).includes(c.setting)) { score += 8; reasons.push(`${c.setting} setting`); } else { score -= 6; concerns.push(`${c.setting} setting`); } }
   if (p.regions.length) { const r = regionOf(c.state, c.country); if (p.regions.includes(r)) { score += 8; reasons.push(`In ${r}`); } else { score -= 6; } }
   if (p.kinds.length) { if (p.kinds.includes(c.kind)) { score += 5; reasons.push(c.kind); } else score -= 5; }
   if (p.size !== 'Any' && c.undergrad) {

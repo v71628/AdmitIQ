@@ -168,7 +168,7 @@ export default function Compare() {
         </ChartCard>
         <ChartCard title="Cost breakdown (your rate, per year)" source={`${DATA_META.sources} (${DATA_META.label})`} legend={[{ label: 'Tuition & fees', color: 'var(--c1)' }, { label: 'Housing & meals', color: 'var(--c2)' }, { label: 'Other', color: 'var(--c3)' }]}>
           <StackedBars format={usd} keys={[{ key: 't', label: 'Tuition & fees', color: 'var(--c1)' }, { key: 'h', label: 'Housing & meals', color: 'var(--c2)' }, { key: 'o', label: 'Books, travel, personal', color: 'var(--c3)' }]}
-            rows={colleges.map((c) => { const t = tuit(c, s), total = coa(c, s); return { label: c.short, total, parts: t === null ? {} : { t, h: c.housingMeals ?? 0, o: total !== null && c.housingMeals !== null ? Math.max(0, total - t - c.housingMeals) : 0 } }; })} />
+            rows={colleges.map((c) => { const t = tuit(c, s), total = coa(c, s); return { label: c.short, total, parts: (t === null ? {} : { t, h: c.housingMeals ?? 0, o: total !== null && c.housingMeals !== null ? Math.max(0, total - t - c.housingMeals) : 0 }) as Record<string, number> }; })} />
         </ChartCard>
         <ChartCard title="Average net price" desc="What aided students paid on average." source={`${DATA_META.sources} (${DATA_META.label})`}>
           <HBars data={colleges.map((c, i) => ({ label: c.short, value: c.netPrice, color: PALETTE[i] }))} format={usd} />

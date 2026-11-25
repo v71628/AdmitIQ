@@ -1,6 +1,6 @@
 {
   "name": "admitiq",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "description": "AdmitIQ \u2014 AI-assisted college admissions intelligence platform. Your college strategy, backed by data.",
   "type": "module",
@@ -15,7 +15,12 @@
     "typecheck": "tsc -p .",
     "seed": "node scripts/gen-seed.mjs",
     "sync:scorecard": "node scripts/sync-scorecard.mjs",
-    "setup": "node scripts/setup.mjs"
+    "setup": "node scripts/setup.mjs",
+    "test": "node --test test/*.test.mjs",
+    "ingest": "node scripts/ingest/run.mjs",
+    "ingest:dry": "node scripts/ingest/run.mjs --dry-run",
+    "sources:verify": "node scripts/ingest/verify.mjs",
+    "db:test": "bash scripts/test-migrations.sh"
   },
   "dependencies": {
     "react": "^19.2.8",

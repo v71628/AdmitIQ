@@ -3,7 +3,7 @@ import { LuArrowLeft, LuArrowRight, LuCheck } from 'react-icons/lu';
 import { Logo, navigate } from '../App';
 import { Button, Card, Progress, cx } from '../components/ui';
 import { AcademicsForm, ActivitiesEditor, BasicsForm, FinancialForm, PersonalForm } from '../components/forms';
-import { ResearchLoader, runSteps } from '../components/loader';
+import { ResearchLoader, runSteps, type StepState } from '../components/loader';
 import { store } from '../lib/store';
 import { COLLEGES } from '../data/colleges';
 import { assess, recommendList } from '../lib/analysis';
@@ -20,7 +20,7 @@ const STEPS = [
 
 export default function Onboarding() {
   const [i, setI] = useState(0);
-  const [building, setBuilding] = useState<{ label: string; status: 'pending' | 'active' | 'done' }[] | null>(null);
+  const [building, setBuilding] = useState<StepState[] | null>(null);
   const step = STEPS[i];
   async function finish() {
     const s = store.get();
