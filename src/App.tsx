@@ -50,7 +50,7 @@ export const NAV = [
 const MOBILE_TABS = [{ id: 'dashboard', label: 'Home', icon: LuLayoutDashboard }, { id: 'colleges', label: 'Search', icon: LuSearch }, { id: 'list', label: 'List', icon: LuListChecks }, { id: 'essays', label: 'Essays', icon: LuFileText }];
 
 // ---------- routing ----------
-const parse = () => (typeof location !== 'undefined' ? decodeURIComponent(location.hash.replace(/^#/, '')) : '') || 'home';
+const parse = () => (typeof location !== 'undefined' ? decodeURIComponent(location.hash.replace(/^#\/?/, '').split('?')[0]) : '') || 'home';
 export function navigate(route: string) {
   if (parse() === route) { window.scrollTo({ top: 0 }); return; }
   location.hash = route;

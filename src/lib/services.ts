@@ -105,7 +105,7 @@ export const library = {
 };
 export interface PlanPrice { amount: number | null; currency: string; interval: string | null; intervalCount: number }
 export const billing = {
-  prices: () => post<{ configured: boolean; plans: Partial<Record<'plus' | 'pro' | 'ultimate', Partial<Record<'monthly' | 'annual', PlanPrice>>>> }>('/api/billing/prices', {}),
+  prices: () => post<{ configured: boolean; plans: Partial<Record<'plus' | 'pro' | 'ultimate', Partial<Record<'monthly' | 'annual', PlanPrice>>>>; trials?: Partial<Record<'plus' | 'pro' | 'ultimate', number>> }>('/api/billing/prices', {}),
   checkout: (plan: 'plus' | 'pro' | 'ultimate', period: 'monthly' | 'annual') => post<{ url: string }>('/api/billing/checkout', { plan, period }),
   portal: () => post<{ url: string }>('/api/billing/portal', {}),
   invoices: () => post<{ invoices: { id: string; number: string; amount: number; currency: string; status: string; created: string; pdf: string; url: string }[] }>('/api/billing/invoices', {}),

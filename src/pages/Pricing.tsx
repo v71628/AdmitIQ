@@ -56,9 +56,11 @@ export default function Pricing() {
         {PLAN_INFO.map((p) => {
           const price = priceFor(p.id); const label = price ? formatPrice(price.amount, price.currency) : null;
           const isCurrent = p.id === current; const featured = p.id === 'pro';
+          const trial = p.id === 'free' ? 0 : prices?.trials?.[p.id] || 0;
+          const perDay = price?.amount ? formatPrice(Math.round(price.amount / (price.interval === 'year' ? 365 : 30)), price.currency) : null;
           return (
             <Card key={p.id} className={cx('relative flex flex-col p-5', featured && 'ring-2 ring-accent')}>
-              {featured && <Badge tone="orange" className="absolute right-4 top-4">Most popular</Badge>}
+              {featured && <Badge tone="orange" className="absolute right-4 top-4">{trial ? `${trial}-day free trial` : 'Most popular'}</Badge>}
               <div className="text-lg font-semibold text-ink">{p.name}</div>
               <div className="text-sm text-muted">{p.tagline}</div>
               <div className="mt-4 h-12">
@@ -66,13 +68,16 @@ export default function Pricing() {
                   : label ? <><span className="text-3xl font-semibold tabular-nums text-ink">{label}</span><span className="text-sm text-muted"> / {price?.interval === 'year' ? 'year' : 'month'}</span></>
                   : <span className="text-sm text-muted">{prices?.configured ? 'Not offered for this period' : 'Price shown once payments are set up'}</span>}
               </div>
-              <div className="text-xs text-muted">{p.units.toLocaleString()} AI units per day</div>
-              <ul className="mt-4 flex-1 space-y-2 text-sm">{p.features.map((f) => <li key={f} className="flex gap-2"><LuCheck className="mt-0.5 shrink-0 text-[var(--teal)]" />{f}</li>)}</ul>
+              <div className="text-xs text-muted">{p.units.toLocaleString()} AI units per day{perDay && ` · about ${perDay} a day`}</div>
+              {trial > 0 && <div className="mt-2 text-xs font-medium text-accent">Try it free for {trial} days. You won't be charged if you cancel before the trial ends.</div>}
+              {p.highlight && <div className="mt-4 text-xs font-semibold uppercase tracking-wide text-accent">{p.highlight}</div>}
+              <ul className={cx('flex-1 space-y-2 text-sm', p.highlight ? 'mt-2' : 'mt-4')}>{p.features.map((f) => <li key={f} className="flex gap-2"><LuCheck className="mt-0.5 shrink-0 text-[var(--teal)]" />{f}</li>)}</ul>
+              {p.perks && <ul className="mt-3 space-y-1 text-xs text-muted">{p.perks.map((f) => <li key={f}>· {f}</li>)}</ul>}
               <div className="mt-5">
                 {isCurrent ? <Button className="w-full" disabled>Current plan</Button>
                   : p.id === 'free' ? <Button className="w-full" disabled={!signedIn || !caps?.billing} onClick={() => go(billing.portal, 'portal')}>{signedIn ? 'Switch to Free' : 'Included'}</Button>
                   : !signedIn ? <Button className="w-full" variant={featured ? 'primary' : 'secondary'} onClick={() => (location.hash = 'login')}>Sign in to upgrade</Button>
-                  : <Button className="w-full" variant={featured ? 'primary' : 'secondary'} disabled={!caps?.billing || !price || !!busy} onClick={() => go(() => billing.checkout(p.id as 'plus' | 'pro' | 'ultimate', period), p.id)}>{busy === p.id ? 'Opening checkout…' : `Choose ${p.name}`}</Button>}
+                  : <Button className="w-full" variant={featured ? 'primary' : 'secondary'} disabled={!caps?.billing || !price || !!busy} onClick={() => go(() => billing.checkout(p.id as 'plus' | 'pro' | 'ultimate', period), p.id)}>{busy === p.id ? 'Opening checkout…' : trial ? `Start ${trial}-day free trial` : `Choose ${p.name}`}</Button>}
               </div>
             </Card>
           );
@@ -85,7 +90,7 @@ export default function Pricing() {
           <div className="space-y-3 p-4 pt-0">
             {usage ? <><Progress value={Math.min(100, (usage.used / Math.max(1, usage.limit)) * 100)} label={`${usage.used} of ${usage.limit} units used`} /><div className="text-sm text-muted">{Math.max(0, usage.limit - usage.used)} units left today{!usage.signedIn && ' · sign in for the Free plan allowance'}</div></>
               : <div className="text-sm text-muted">{caps?.ai ? 'Loading…' : 'AI is not connected on this server.'}</div>}
-            <table className="w-full text-sm"><tbody>{TASK_UNIT_COSTS.map((t) => <tr key={t.task} className="border-t border-line"><td className="py-1.5">{t.task}</td><td className="py-1.5 text-right tabular-nums text-muted">{t.units} unit{t.units > 1 ? 's' : ''}</td></tr>)}</tbody></table>
+            <table className="w-full text-sm"><tbody>{TASK_UNIT_COSTS.map((t) => <tr key={t.task} className="border-t border-line"><td className="py-1.5">{t.task}{t.plan && <Badge className="ml-2">{t.plan}</Badge>}</td><td className="py-1.5 text-right tabular-nums text-muted">{t.units} unit{t.units > 1 ? 's' : ''}</td></tr>)}</tbody></table>
           </div>
         </Card>
         <Card>

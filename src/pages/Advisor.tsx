@@ -11,13 +11,36 @@ import { contextForLLM } from '../lib/strategist';
 // and turns on history in Settings). Each answer records which provider/model wrote it.
 interface Msg { id: string; role: 'user' | 'assistant'; content: string; mode?: Mode; citations?: WebCitation[]; grounded?: boolean; provider?: string; model?: string; error?: string; pinned?: boolean; at: string }
 interface Conv { id: string; title: string; folder: string; messages: Msg[]; updated: string }
-type Mode = 'quick' | 'deep' | 'research';
+type Mode = 'quick' | 'deep' | 'research' | 'committee' | 'review';
 
 const KEY = 'admitiq:advisor:v1';
-const MODES: { id: Mode; label: string; task: AITask; desc: string }[] = [
+const MODES: { id: Mode; label: string; task: AITask; desc: string; plan?: 'Pro'; placeholder?: string; prompt?: string }[] = [
   { id: 'quick', label: 'Quick answer', task: 'chat', desc: 'Fast, low-cost model. Good for definitions and simple questions.' },
   { id: 'deep', label: 'Deep analysis', task: 'analysis', desc: 'Stronger model for strategy, comparisons and your college list.' },
   { id: 'research', label: 'Research with sources', task: 'research', desc: 'Searches the web (Google Search grounding) and cites every source.' },
+  { id: 'committee', label: 'Committee simulation', task: 'simulation', plan: 'Pro', desc: 'Three AI admissions readers review your profile for one college, debate it and vote.',
+    placeholder: 'Name a college, e.g. "University of Michigan, Computer Science, Early Action"',
+    prompt: `MODE: ADMISSIONS COMMITTEE SIMULATION. This is a role-play to help the student see their application from the reader's side. It is not a prediction and must never be presented as one.
+Use the student's profile and the college they name. Run a committee of three distinct readers:
+1. The regional reader (knows the student's school context and how they used their opportunities),
+2. The academic reader (rigor, grades, tests, intellectual curiosity, fit with the intended major),
+3. The holistic reader (activities, impact, character, voice, how they would add to campus).
+Format with these headings:
+## The file at a glance (5 bullets: what a reader notices first)
+## Reader notes (each reader: 2 strengths, 2 concerns, a 1-line summary in their own voice)
+## Committee discussion (a short realistic back-and-forth where readers push on each other's points)
+## Mock vote (each reader: Admit / Waitlist / Deny with one reason; then the committee outcome)
+## What would flip the decision (the 3 highest-impact, realistic changes before the deadline, most impactful first)
+Rules: Base everything on the profile provided; if key facts are missing (GPA, rigor, tests, activities, intended major), say which ones and how they limit the simulation. Use only well-known, stable facts about the college; if unsure about a specific program or statistic, say so instead of inventing it. End with one line reminding the student that real committees vary and this is practice, not a forecast.` },
+  { id: 'review', label: 'Full application review', task: 'long_document', plan: 'Pro', desc: 'Paste your whole application (essays, activities, awards, additional info) for a top-to-bottom read.',
+    placeholder: 'Paste your full application: personal statement, supplements, activities list, awards, additional info…',
+    prompt: `MODE: FULL APPLICATION REVIEW. The student pasted their application. Read all of it as a careful admissions reader would, then respond with:
+## Overall read (3 sentences: the story the application tells, and whether it is coherent)
+## Top 10 fixes, ranked by impact (each: where it is, what is wrong, a concrete fix; quote at most a short phrase from their text)
+## Section by section (personal statement, each supplement, activities list, awards, additional info: one strength and one fix each; skip sections they did not include)
+## Consistency check (contradictions, repeated stories, missing context, typos or formatting problems you noticed)
+## What is missing (things readers usually look for that are absent)
+Rules: Do not rewrite their essays or write new paragraphs for them; give specific, actionable direction in their voice. Never invent facts about the student. Be honest and kind.` },
 ];
 const STARTERS = [
   'Which schools on my list are reaches, targets and likely — and why?',
@@ -67,7 +90,8 @@ export default function Advisor() {
     const reply: Msg = { id: uid(), role: 'assistant', content: '', mode, at: new Date().toISOString() };
     update(cid, (c) => ({ ...c, title: c.messages.length ? c.title : q.slice(0, 70), messages: [...c.messages, userMsg, reply], updated: new Date().toISOString() }));
     const history: ChatMessage[] = [...active.messages, userMsg].filter((m) => !m.error).slice(-12).map((m) => ({ role: m.role, content: m.content }));
-    const messages: ChatMessage[] = [{ role: 'system', content: SYSTEM + (useProfile ? `\n\nSTUDENT PROFILE (JSON, may be partial):\n${contextForLLM(store.get())}` : '\n\nThe student chose not to share their profile in this conversation.') }, ...history];
+    const modeInfo = MODES.find((m) => m.id === mode)!;
+    const messages: ChatMessage[] = [{ role: 'system', content: SYSTEM + (modeInfo.prompt ? `\n\n${modeInfo.prompt}` : '') + (useProfile ? `\n\nSTUDENT PROFILE (JSON, may be partial):\n${contextForLLM(store.get())}` : '\n\nThe student chose not to share their profile in this conversation.') }, ...history];
     const task = MODES.find((m) => m.id === mode)!.task;
     setBusy(true);
     try {
@@ -82,7 +106,7 @@ export default function Advisor() {
       }
     } catch (e) {
       const err = e as ApiError;
-      const msg = err.name === 'AbortError' ? 'Stopped.' : err.code === 'quota' ? `${err.message} Upgrade for higher limits.` : err.code === 'plan_required' ? `${err.message}` : err.message || 'Something went wrong.';
+      const msg = err.name === 'AbortError' ? 'Stopped.' : err.code === 'quota' ? `${err.message} Upgrade for higher limits.` : err.code === 'plan_required' ? `${MODES.find((m) => m.id === mode)?.label || 'This tool'} is part of Pro. Upgrade to use it.` : err.message || 'Something went wrong.';
       setConvs((cs) => cs.map((c) => (c.id === cid ? { ...c, messages: c.messages.map((m) => (m.id === reply.id ? { ...m, error: msg } : m)) } : c)));
     } finally { setBusy(false); abort.current = null; }
   }
@@ -178,10 +202,11 @@ export default function Advisor() {
           </div>
           <form className="border-t border-line p-3" onSubmit={(e) => { e.preventDefault(); send(); }}>
             <div className="mb-2 flex flex-wrap gap-1.5" role="radiogroup" aria-label="Answer mode">
-              {MODES.map((m) => <button type="button" role="radio" aria-checked={mode === m.id} key={m.id} title={m.desc} onClick={() => setMode(m.id)} className={cx('rounded-full border px-3 py-1 text-xs transition', mode === m.id ? 'border-ink bg-ink text-surface' : 'border-line text-muted hover:text-ink')}>{m.label}</button>)}
+              {MODES.map((m) => <button type="button" role="radio" aria-checked={mode === m.id} key={m.id} title={m.desc} onClick={() => setMode(m.id)} className={cx('inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs transition', mode === m.id ? 'border-ink bg-ink text-surface' : 'border-line text-muted hover:text-ink')}>{m.label}{m.plan && <span className={cx('rounded px-1 text-[10px] font-semibold', mode === m.id ? 'bg-surface/20' : 'bg-accent/15 text-accent')}>{m.plan}</span>}</button>)}
             </div>
+            {MODES.find((m) => m.id === mode)?.plan && <p className="mb-2 text-xs text-muted">{MODES.find((m) => m.id === mode)!.desc} Included with Pro. <a className="underline" href="#pricing">See plans</a></p>}
             <div className="flex items-end gap-2">
-              <Textarea rows={2} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder="Ask about colleges, essays, majors, costs…" aria-label="Message" className="min-h-[52px] flex-1 resize-none" />
+              <Textarea rows={mode === 'review' ? 6 : 2} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }} placeholder={MODES.find((m) => m.id === mode)?.placeholder || 'Ask about colleges, essays, majors, costs…'} aria-label="Message" className="min-h-[52px] flex-1 resize-none" />
               {busy && mode !== 'research' ? <Button type="button" icon={<LuSquare />} onClick={() => abort.current?.abort()}>Stop</Button> : <Button type="submit" variant="primary" icon={<LuSend />} disabled={!input.trim() || busy}>Send</Button>}
             </div>
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
