@@ -49,7 +49,16 @@ fs.writeFileSync(path.join(dist, 'colleges.json'), JSON.stringify(mod.COLLEGES))
 // ADMITIQ_API=https://… builds a static copy (e.g. GitHub Pages) that talks to that AdmitIQ server.
 const apiBase = (process.env.ADMITIQ_API || '').trim().replace(/\/$/, '');
 if (apiBase && !/^(https:\/\/[\w.-]+|http:\/\/(localhost|127\.0\.0\.1))(:\d+)?$/.test(apiBase)) throw new Error(`ADMITIQ_API must be an https origin, got ${apiBase}`);
-const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8').replace('<head>', () => (apiBase ? `<head>\n  <meta name="admitiq-api" content="${apiBase}" />` : '<head>'));
+// ADMITIQ_GOATCOUNTER=<code> adds GoatCounter visitor counting (https://<code>.goatcounter.com).
+// Pages are hash routes (#advisor), so each route change counts as its own page view.
+const goat = (process.env.ADMITIQ_GOATCOUNTER || '').trim().toLowerCase();
+if (goat && !/^[a-z0-9-]{2,50}$/.test(goat)) throw new Error(`ADMITIQ_GOATCOUNTER must be a GoatCounter site code, got ${goat}`);
+const goatTag = goat
+  ? `  <script>window.goatcounter={path:function(){return location.pathname+location.hash.split('?')[0]}};addEventListener('hashchange',function(){if(window.goatcounter.count)window.goatcounter.count({path:location.pathname+location.hash.split('?')[0]})});</script>\n  <script data-goatcounter="https://${goat}.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>\n</body>`
+  : '</body>';
+const html = fs.readFileSync(path.join(root, 'src/index.html'), 'utf8')
+  .replace('<head>', () => (apiBase ? `<head>\n  <meta name="admitiq-api" content="${apiBase}" />` : '<head>'))
+  .replace('</body>', () => goatTag);
 fs.writeFileSync(path.join(dist, 'index.html'), html);
 if (process.argv.includes('--single')) {
   const js = fs.readFileSync(path.join(dist, 'app.js'), 'utf8').replace(/<\/script/gi, '<\\/script');
